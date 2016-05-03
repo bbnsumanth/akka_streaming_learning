@@ -6,8 +6,7 @@ import akka.stream._
 import akka.stream.scaladsl._
 import GraphDSL.Implicits._
 
-import scala.collection.immutable.Range.Inclusive
-import scala.concurrent.{Await, Future, ExecutionContextExecutor}
+import scala.concurrent.{ Future, ExecutionContextExecutor}
 
 object Runnr2 extends App {
 
@@ -96,12 +95,12 @@ object Runnr2 extends App {
 
     val zip2: FanInShape2[Int, Int, Int] = b.add(ZipWith[Int, Int, Int](math.max _))
 
-    val zip3: FanInShape2[Int, Int, Int] = b.add(ZipWith[Int, Int, Int]((x:Int,y:Int) => x + y))
+    val zip3: FanInShape2[Int, Int, Int] = b.add(ZipWith[Int, Int, Int]((x: Int, y: Int) => x + y))
 
     zip1.out ~> zip3.in0
     zip2.out ~> zip3.in1
 
-    UniformFanInShape(zip3.out, zip1.in0, zip1.in1, zip2.in0,zip2.in1)
+    UniformFanInShape(zip3.out, zip1.in0, zip1.in1, zip2.in0, zip2.in1)
 
   }
 
@@ -152,6 +151,87 @@ object Runnr2 extends App {
 
   val firstPair: Future[Done] = source.runWith(Sink.foreach(println))
 
+
+  //********************************************************************************************************************
+
+  val flowGraph: Graph[FlowShape[Int, (Int, String)], NotUsed] = GraphDSL.create() { implicit b =>
+
+    val broadcast: UniformFanOutShape[Int, Int] = b.add(Broadcast[Int](2))
+    val zip = b.add(Zip[Int, String]())
+
+    // connect the graph
+    broadcast.out(0).map(_ + 10) ~> zip.in0
+    broadcast.out(1).map(_.toString) ~> zip.in1
+
+    // expose ports
+    FlowShape(broadcast.in, zip.out)
+  }
+
+  val flow: Flow[Int, (Int, String), NotUsed] = Flow.fromGraph(flowGraph)
+
+  flow.runWith(Source(List(1, 2, 3, 4, 5)), Sink.foreach(println))
+
+  //********************************************************************************************************************
+
+  //combining sinks and sources can also be performed using a simple api,with out creating custom graphs
+
+  val sourceOne = Source(List(1, 2, 3, 4))
+  val sourceTwo = Source(List(5, 6, 7, 8))
+  val mergedSource = Source.combine(sourceOne, sourceTwo)(Merge(_))
+
+  val sumSink: Sink[Int, Future[Int]] = Sink.fold(0)((x, y) => {
+    println(x, y)
+    x + y
+  })
+  val printSink: Sink[Int, Future[Done]] = Sink.foreach[Int](println)
+
+  val combinedSink: Sink[Int, NotUsed] = Sink.combine(sumSink, printSink)(Broadcast[Int](_))
+
+  mergedSource.runWith(combinedSink)
+
+
+  //********************************************************************************************************************
+
+//  //Building reusable Graph components
+//  //It is possible to build reusable, encapsulated components of arbitrary input and output ports using the graph DSL.
+//
+//  // a graph junction that represents a pool of workers, where a worker is expressed as a Flow[I,O,_], i.e. a simple transformation of jobs of type I to results of type O
+//  // ( this flow can actually contain a complex graph inside).
+//  // Our reusable worker pool junction will not preserve the order of the incoming jobs (they are assumed to have a proper ID field) and
+//  // it will use a Balance junction to schedule jobs to available workers.
+//  // On top of this, our junction will feature a "fastlane", a dedicated port where jobs of higher priority can be sent.
+//
+//  // A shape represents the input and output ports of a reusable
+//  // processing module
+//
+//  // In general a custom Shape needs to
+//  // be able to provide all its input and output ports,
+//  // be able to copy itself, and also
+//  // be able to create a new instance from given ports.
+//  case class PriorityWorkerPoolShape[In, Out](jobsIn: Inlet[In], priorityJobsIn: Inlet[In], resultsOut: Outlet[Out]) extends Shape {
+//
+//    // It is important to provide the list of all input and output
+//    // ports with a stable order. Duplicates are not allowed.
+//    override val inlets: Seq[Inlet[_]] = jobsIn :: priorityJobsIn :: Nil
+//    override val outlets: Seq[Outlet[_]] = resultsOut :: Nil
+//
+//    // A Shape must be able to create a copy of itself. Basically
+//    // it means a new instance with copies of the ports
+//    override def deepCopy() = PriorityWorkerPoolShape(
+//      jobsIn.carbonCopy(),
+//      priorityJobsIn.carbonCopy(),
+//      resultsOut.carbonCopy())
+//
+//    // A Shape must also be able to create itself from existing ports
+//    override def copyFromPorts(inlets: collection.immutable.Seq[Inlet[_]], outlets: collection.immutable.Seq[Outlet[_]]): Shape = {
+//      assert(inlets.size == this.inlets.size)
+//      assert(outlets.size == this.outlets.size)
+//      // This is why order matters when overriding inlets and outlets.
+//      PriorityWorkerPoolShape[In, Out](inlets(0).as[In], inlets(1).as[In], outlets(0).as[Out])
+//    }
+//  }
+
+  //********************************************************************************************************************
 
 
 
